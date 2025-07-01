@@ -1,0 +1,19 @@
+# Proyectos y base de datos con derechos de autor
+BigVGAN/
+musdb/
+musdb_wav/
+
+#Ignorar archivos de prueba y checkpoints
+checkpoints/
+checkpoints probados/
+Copias de seguridad/
+wav generados/
+
+#Archivos no relevantes
+__pycache__/
+*.py[cod]
+*.ipynb_checkpoints
+*.log
+.DS_Store
+Thumbs.db
+.vscode/
