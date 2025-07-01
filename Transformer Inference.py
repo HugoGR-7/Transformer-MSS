@@ -13,8 +13,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 from tkinter import Tk, filedialog
 
-import bigvgan
-from meldataset import get_mel_spectrogram
+import BigVGAN.bigvgan as bigvgan
+from BigVGAN.meldataset import get_mel_spectrogram
 import soundfile as sf
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
