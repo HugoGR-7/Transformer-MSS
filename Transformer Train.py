@@ -12,8 +12,8 @@ import numpy as np
 import os
 import random
 
-import bigvgan
-from meldataset import get_mel_spectrogram
+import BigVGAN.bigvgan as bigvgan
+from BigVGAN.meldataset import get_mel_spectrogram
 from IPython.display import Audio
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
