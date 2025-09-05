@@ -8,6 +8,8 @@ output_root = "C:/Users/Hugo/Desktop/HuggingFace/musdb_wav"
 
 stem_names = ["mixture", "drums", "bass", "other", "vocals"]
 
+#Código usado para separar las pistas de audio del conjunto de datos original
+
 for split in ["train", "test"]:
     input_path = os.path.join(input_root, split)
     output_path = os.path.join(output_root, split)

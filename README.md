@@ -5,9 +5,9 @@ Este proyecto esta pensado para equipos de baja capacidad de cómputo, todo el e
 
 ##  Descripción
 
-De primeras el dataset es dividido en segmentos de 30 segundos y convertido a espectrogramas de Mel. Esto se hace para reducir enormemente la demanda computacional del modelo.
+De primeras el dataset es dividido en segmentos de 20 segundos y convertido a espectrogramas de Mel. Esto se hace para reducir enormemente la demanda computacional del modelo.
 
-Los espectrogramas son tratados como imágenes, donde se dividen en porciones. A cada porción se le asigna un vector de embeddings y se procede al entrenamiento, comparando entre la canción completa y el instrumento que queremos aislar. Una vez generado un espectrograma de Mel, se procede a convertirlo de nuevo a señal de audio mediante el vocoder de BigVGAN.
+Los espectrogramas son tratados como imágenes, donde se dividen en parches. Cada parche se proyecta sobre un vector de embedding y se procede al entrenamiento, comparando entre la canción completa y el instrumento que queremos aislar. Una vez generado un espectrograma de Mel, se procede a convertirlo de nuevo a señal de audio mediante el Vocoder de BigVGAN.
 
 En el repositiorio existe un rar con las diferentes pruebas y resultados obtenidos, algunos consiguiendo ya un aprendizaje considerable cuando se hace overfit sobre una parte pequeña del dataset (10 canciones)
 
