@@ -13,6 +13,7 @@ audios y espectrogramas para la memoria de Separación de fuentes sonoras musica
 espectrogramas/
 wavs voz/
 archivos generales/
+modelos entrenados/
 
 #Archivos no relevantes
 __pycache__/
