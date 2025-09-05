@@ -5,6 +5,7 @@ from torch.utils.data import Dataset
 import torch.nn as nn
 from torch.utils.data import DataLoader
 import torch.nn.functional as F
+from pytorch_msssim import ssim
 import math
 import librosa
 import matplotlib.pyplot as plt
@@ -12,23 +13,33 @@ import numpy as np
 import os
 import random
 
-import BigVGAN.bigvgan as bigvgan
-from BigVGAN.meldataset import get_mel_spectrogram
+#import BigVGAN.bigvgan as bigvgan
+import bigvgan
+from meldataset import get_mel_spectrogram
+from utils import plot_spectrogram
 from IPython.display import Audio
 
+#Código de entrenamiento, contiene: Preprocesamiento del conjunto de datos, definición de la arquitectura y bucle de entrenamiento
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
-
-#Cargamos el dataset
-dataset = load_dataset("danjacobellis/musdb", split="test")
-print(dataset)
 
 #Vocoder BigVGAN, cargado desde Hugging Face. Para entrenar no es necesario a priori pero necesitamos los parámetros de Mel del Vocoder
 modelVocoder = bigvgan.BigVGAN.from_pretrained('nvidia/bigvgan_v2_24khz_100band_256x', use_cuda_kernel=False)
 modelVocoder.remove_weight_norm()
 modelVocoder = modelVocoder.eval().to(device)
 
-def waveform_to_mel(waveform):
+def plot_mel_spectrogram(mel_spec, title): 
+    # Visualización del Mel spectrogram
+    plt.figure(figsize=(10, 4))
+    plt.imshow(mel_spec.squeeze().cpu(), origin="lower", aspect="auto", cmap="magma")
+    plt.title(title)
+    plt.xlabel("Frames")
+    plt.ylabel("Mel bands")
+    plt.colorbar()
+    plt.tight_layout()
+    plt.show()
 
+def waveform_to_mel(waveform):
+    #Función para pasar de .wav a espectrograma de mel
     tensor = torch.tensor(waveform).float()
     if tensor.ndim == 2:  # Estéreo a mono
         #print(f"[INFO] Convertido de estéreo a mono: shape antes = {tensor.shape}")
@@ -44,18 +55,21 @@ def waveform_to_mel(waveform):
     return mel_spec
 
 def waveform_downsample(waveform, target_sr):
+    #Función para bajar la frecuencia de muestreo a 24000 Hz
     sample_rate = 44100 
     waveform = librosa.resample(waveform, orig_sr=sample_rate, target_sr=target_sr)
     return waveform
 
 class MusdbMelDataset(Dataset):
-    def __init__(self, root_dir, sample_rate=24000, segment_length=30, data_augmentation=False):
+    #Preprocesado del conjunto de datos
+    def __init__(self, root_dir, sample_rate=24000, segment_length=20, data_augmentation=False):
         self.sample_rate = sample_rate
         self.segment_length = segment_length
         self.segment_duration_samples = sample_rate * segment_length
         self.segments = []
-        self.data_augmentation = data_augmentation
+        self.data_augmentation = data_augmentation #Uso de data augmentation (no usada al final)
         for song_folder in os.listdir(root_dir):
+            #Iteramos cada canción del conjunto de datos
             song_path = os.path.join(root_dir, song_folder)
             mix_path = os.path.join(song_path, "mixture.wav")
             vocals_path = os.path.join(song_path, "vocals.wav")
@@ -73,6 +87,7 @@ class MusdbMelDataset(Dataset):
                 self.segments.extend(self.split_into_segments(mixture, vocals))
 
     def split_into_segments(self, mixture, vocals):
+        #Método para separar las canciones en segmentos
         segment_samples = self.segment_length * self.sample_rate
 
         total_samples = mixture.shape[-1]
@@ -83,6 +98,7 @@ class MusdbMelDataset(Dataset):
         segments = []
 
         for i in range(num_segments):
+            #Dividimos el audio en segmentos de duración especificada
             start = i * segment_samples - i*segment_samples//2
             end = start + segment_samples
             #print(f"Segmento {i}: {start} a {end}")
@@ -102,6 +118,7 @@ class MusdbMelDataset(Dataset):
         return segments
     
     def apply_augmentation(self, mix, voc):
+        #El aumento de datos demostró desde un principio que no funcionaba, no se usó
         if random.random() < 0.5:
             # 50% probabilidad de aplicar ganancia
             gain = random.uniform(0.8, 1.2)
@@ -133,6 +150,8 @@ class MusdbMelDataset(Dataset):
         return self.segments[idx]
 
 class PositionalEncoding(nn.Module):
+    #Primera clase de encoding posicional, aplicando el algoritmo original de Attention is All You Need
+    #Al final se optó por usar vectores aprendibles
     def __init__(self, d_model, max_len=50000, dropout=0.1):
         super().__init__()
         self.dropout = nn.Dropout(p=dropout)
@@ -154,7 +173,7 @@ class PositionalEncoding(nn.Module):
         return self.dropout(x)
         
 class EmbeddingAudioTransformer(nn.Module):
-    def __init__(self, n_mels=100, patch_width = 5, dim=256, nhead=2, num_layers=2, dropout=0.2):
+    def __init__(self, n_mels=100, patch_width = 5, dim=256, nhead=4, num_layers=6, dropout=0.2):
         super().__init__()
         self.patch_width = patch_width
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -163,16 +182,17 @@ class EmbeddingAudioTransformer(nn.Module):
         self.n_mels = n_mels
 
         #Asignarle a cada patch su embedding
-        self.patch_embed = nn.Linear(self.patch_dim, dim)
-        #self.pos_encoder = PositionalEncoding(dim, dropout=dropout)
-        self.position_embedding = None
+        self.patch_embed = nn.Linear(self.patch_dim, dim) #Proyección lineal de los parches
+        max_seq_len = 600
+        self.position_embedding = nn.Parameter(torch.zeros(max_seq_len, dim)) #Vector posicional aprendible
 
+        #Solo tenemos el encoder
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=dim,
             nhead=nhead,
             dim_feedforward=dim * 2,
             dropout=dropout,
-            batch_first=True  # muy importante si usas [batch, seq, dim]
+            batch_first=True  #[batch, seq, dim]
         )
         self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
 
@@ -198,9 +218,7 @@ class EmbeddingAudioTransformer(nn.Module):
         embeddings = self.patch_embed(patches)  # [B, num_patches, embedding_dim]
 
         # Embeddings posicionales
-        if self.position_embedding is None or self.position_embedding.size(0) != num_patches:
-            self.position_embedding = nn.Parameter(torch.zeros(num_patches, self.dim).to(mel_spec.device))
-        embeddings = embeddings + self.position_embedding  # [B, num_patches, embedding_dim]
+        embeddings = embeddings + self.position_embedding[:num_patches, :].unsqueeze(0)  # [1, num_patches, D]
 
         # Transformer
         transformed = self.transformer(embeddings)  # [B, num_patches, embedding_dim]
@@ -215,36 +233,51 @@ class EmbeddingAudioTransformer(nn.Module):
         return mel_out
 
 def custom_loss(pred, target):
-    return 0.5 * F.mse_loss(pred, target) + 0.5 * F.l1_loss(pred, target)
+    l1Loss = F.l1_loss(pred, target)
+
+    #ssim esta diseñado para imágenes y espera canal RGB
+    if pred.ndim == 3:
+        pred = pred.unsqueeze(1)
+        target = target.unsqueeze(1)
+
+    ssim_loss = 1 - ssim(pred, target, data_range= 1.0, size_average= True)
+    return 0.5 * l1Loss + 0.5 * ssim_loss
+
+
 #Elegimos entre entrenamiento desde cero o checkpoint
 Eleccion = int(input("1 = Empezar de 0 \n 2 = Elegir checkpoint"))
 if(Eleccion == 1):
     model = EmbeddingAudioTransformer().to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr = 1e-4)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=10)
 
 else:
     model = EmbeddingAudioTransformer().to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr = 1e-4)
 
-    checkpoint = torch.load("hola.pth", weights_only=True)
+    checkpoint = torch.load("C:\\Users\\Hugo\\Desktop\\Transformer MSS\\checkpoints\\checkpoint_loss0.4219_checkpoint_valloss0.9040_epoch704.pth", weights_only=True)
     model.load_state_dict(checkpoint['model_state_dict'])
     optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
     epoch = checkpoint['epoch']
-    loss = checkpoint['loss']
+    avg_loss = checkpoint['train_loss']
+    avg_val_loss = checkpoint['val_loss']
     #scheduler
 
-
-train_dataset = MusdbMelDataset("C:/Users/Hugo/Desktop/HuggingFace/musdb_wav/train", data_augmentation = False)
-train_loader = DataLoader(train_dataset, batch_size=8, shuffle=True)
-test_dataset = MusdbMelDataset("C:/Users/Hugo/Desktop/HuggingFace/musdb_wav/test", data_augmentation = False)
-test_loader = DataLoader(test_dataset, batch_size=64, shuffle=True)
+#Cargamos los datos
+train_dataset = MusdbMelDataset("C:/Users/Hugo/Desktop/Transformer MSS/musdb_wav/train", data_augmentation = False)
+train_loader = DataLoader(train_dataset, batch_size=3, shuffle=True)
+test_dataset = MusdbMelDataset("C:/Users/Hugo/Desktop/Transformer MSS/musdb_wav/test", data_augmentation = False)
+test_loader = DataLoader(test_dataset, batch_size=1, shuffle=True)
 
 best_loss = float("inf")
 log_file = "checkpoints/training_log.txt"
 os.makedirs("checkpoints", exist_ok=True)
 
-for epoch in range(100000):
+total_epochs = 1000
+max_lr = 5e-4
+warmup_steps = total_epochs/2
+
+#Bucle de entrenamiento
+for epoch in range(total_epochs):
     model.train()
     epoch_loss = 0.0
     batch_count = 0
@@ -257,8 +290,6 @@ for epoch in range(100000):
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
-        #scheduler.step(loss)
-
         epoch_loss += loss.item()
         batch_count += 1
 
@@ -277,7 +308,8 @@ for epoch in range(100000):
 
         avg_val_loss = val_loss / val_batches
 
-    if (epoch > 50000) and (avg_val_loss < best_loss):
+    #Guardado de checkpoints de entrenamiento
+    if (avg_val_loss < best_loss) or (epoch % 50 == 0):
         checkpoint_path = f"checkpoints/checkpoint_loss{avg_loss:.4f}_checkpoint_valloss{avg_val_loss:.4f}_epoch{epoch}.pth"
         print(f"Modelo guardado: {checkpoint_path}")
         with open(log_file, "a") as f:

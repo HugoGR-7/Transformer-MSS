@@ -13,9 +13,11 @@ import matplotlib.pyplot as plt
 import numpy as np
 from tkinter import Tk, filedialog
 
-import BigVGAN.bigvgan as bigvgan
-from BigVGAN.meldataset import get_mel_spectrogram
+import bigvgan
+from meldataset import get_mel_spectrogram
 import soundfile as sf
+
+#Código de inferencia, recibe cualquier señal de audio .wav y la filtra según el modelo elegido por el usuario
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 dataset = load_dataset("danjacobellis/musdb", split="test")
@@ -25,56 +27,10 @@ modelVocoder = bigvgan.BigVGAN.from_pretrained('nvidia/bigvgan_v2_24khz_100band_
 modelVocoder.remove_weight_norm()
 modelVocoder = modelVocoder.eval().to(device)  
 
-class PositionalEncoding(nn.Module):
-    def __init__(self, d_model, max_len=50000, dropout=0.1):
-        super().__init__()
-        self.dropout = nn.Dropout(p=dropout)
-
-        # Positional encoding: [max_len, d_model]
-        pe = torch.zeros(max_len, d_model)
-        position = torch.arange(0, max_len).unsqueeze(1)  # [max_len, 1]
-        div_term = torch.exp(torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model))  # [d_model/2]
-
-        pe[:, 0::2] = torch.sin(position * div_term)  # pares
-        pe[:, 1::2] = torch.cos(position * div_term)  # impares
-        pe = pe.unsqueeze(0)  # [1, max_len, d_model]
-
-        self.register_buffer('pe', pe)
-
-    def forward(self, x):
-        # x: [batch_size, seq_len, d_model]
-        x = x + self.pe[:, :x.size(1), :]
-        return self.dropout(x)
-    
-class SimpleAudioTransformer(nn.Module):
-    def __init__(self, n_mels=100, dim=256, nhead=8, num_layers=16, dropout=0.2):
-        super().__init__()
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-        self.input_proj = nn.Linear(n_mels, dim)  # [batch, seq, n_mels] -> [batch, seq, dim]
-        self.pos_encoder = PositionalEncoding(dim, dropout=dropout)
-
-        encoder_layer = nn.TransformerEncoderLayer(
-            d_model=dim,
-            nhead=nhead,
-            dim_feedforward=dim * 2,
-            dropout=dropout,
-            batch_first=True  # muy importante si usas [batch, seq, dim]
-        )
-        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
-
-        self.output_proj = nn.Linear(dim, n_mels)
-
-    def forward(self, x):
-        # x: [batch, seq, n_mels]
-        x = self.input_proj(x)       # [batch, seq, dim]
-        x = self.pos_encoder(x)      # aplica codificación posicional
-        x = self.transformer(x)      # [batch, seq, dim]
-        x = self.output_proj(x)      # [batch, seq, n_mels]
-        return x
-
 class EmbeddingAudioTransformer(nn.Module):
-    def __init__(self, n_mels=100, patch_width = 10, dim=256, nhead=4, num_layers=8, dropout=0.2):
+    #def __init__(self, n_mels=100, patch_width = 10, dim=256, nhead=4, num_layers=8, dropout=0.2):
+    def __init__(self, n_mels=100, patch_width = 5, dim=512, nhead=4, num_layers=4, dropout=0.2):
+
         super().__init__()
         self.patch_width = patch_width
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -85,7 +41,7 @@ class EmbeddingAudioTransformer(nn.Module):
         #Asignarle a cada patch su embedding
         self.patch_embed = nn.Linear(self.patch_dim, dim)
         #self.pos_encoder = PositionalEncoding(dim, dropout=dropout)
-        max_patches = 281
+        max_patches = 600
         self.position_embedding = nn.Parameter(torch.zeros(max_patches, self.dim))
 
         encoder_layer = nn.TransformerEncoderLayer(
@@ -138,6 +94,17 @@ class EmbeddingAudioTransformer(nn.Module):
             #print(mel_out.shape)
         return mel_out
 
+def save_mel_image(mel_tensor, filename):
+    #Método que guarda los espectrogramas para la memoria
+    plt.figure(figsize=(10, 4))
+    plt.imshow(mel_tensor.squeeze(0), aspect="auto", origin="lower")
+    plt.colorbar(format="%+2.0f dB")
+    plt.xlabel("Tiempo")
+    plt.ylabel("Bandas de Mel")
+    plt.title(filename)
+    plt.tight_layout()
+    plt.savefig(filename)
+    plt.close()
 
 def waveform_to_mel(waveform):
 
@@ -158,6 +125,7 @@ def waveform_to_mel(waveform):
     return mel_spec
 
 def infer_and_reconstruct(sample):
+    #Generamos la predicción del modelo elegido
     checkpoint_path = seleccionar_archivo()
     checkpoint = torch.load(checkpoint_path, weights_only=True)
     model.load_state_dict(checkpoint['model_state_dict'])
@@ -167,13 +135,14 @@ def infer_and_reconstruct(sample):
         x = x.permute(0, 2, 1)  # Ahora será [B, n_mels, time]
         print(f"Forma de x: {x.shape}")
         pred_mel = model(x).squeeze(0).T.cpu()
+        save_mel_image(pred_mel.T, ".mel_pred.png")
         print(f"Forma de pred_mel: {pred_mel.shape}")
-        mel_to_audio(pred_mel, save_path="BigVGANgenerated10000.wav")
+        mel_to_audio(pred_mel, save_path=".predicted20segundos.wav")
 
 def mel_to_audio(mel_tensor: torch.Tensor, save_path: str = "generated.wav"):
-    """
-    Convierte un mel spectrogram (con forma [1, C_mel, T]) a audio WAV usando BigVGAN.
-    """
+    
+    #Convierte un mel spectrogram (con forma [1, C_mel, T]) a audio WAV usando BigVGAN.
+    
     mel_tensor = mel_tensor.T.unsqueeze(0)  # Añadimos el batch size que hemos quitado durante el entrenamiento [1, C_mel, T]
     mel_tensor = mel_tensor.to(device)
     with torch.inference_mode():
@@ -183,7 +152,7 @@ def mel_to_audio(mel_tensor: torch.Tensor, save_path: str = "generated.wav"):
     print(f"Audio generado guardado en: {save_path}")
 
 def seleccionar_archivo(extension=".pth"):
-    """Abre un diálogo para seleccionar un archivo .pth y devuelve la ruta."""
+    #Abre un diálogo para seleccionar un archivo .pth y devuelve la ruta. Este archivo recoge el checkpoint del modelo
     root = Tk()
     root.withdraw()  # Oculta la ventana principal de Tk
     ruta = filedialog.askopenfilename(
@@ -198,24 +167,49 @@ def waveform_downsample(waveform, target_sr):
     return waveform
 
 model = EmbeddingAudioTransformer().to(device)
-SEGMENT_DURATION = 30
-SAMPLE_RATE = 24000  # o 24000, según corresponda
+SEGMENT_DURATION = 20
+SAMPLE_RATE = 24000
 
-# Suponiendo que dataset[0]["mixture"]["array"] existe
-mix = torch.tensor(dataset[0]["mixture"]["array"])
+#Indicamos la ruta del archivo a filtrar
+mix_path = "C:\\Users\\Hugo\\Desktop\\Transformer MSS\\musdb_wav\\test\\Lyndsey Ollard - Catching Up\\mixture.wav"
+vocals_path = "C:\\Users\\Hugo\\Desktop\\Transformer MSS\\musdb_wav\\test\\Lyndsey Ollard - Catching Up\\vocals.wav"
+
+mix, _ = torchaudio.load(mix_path)
+vocals, _ = torchaudio.load(vocals_path)
 print(mix.shape)
-vocals = torch.tensor(dataset[0]["vocals"]["array"])
 
 mix_down = waveform_downsample(mix.numpy(), 24000)
 mix_down = torch.from_numpy(mix_down)
-sf.write("mix_sample.wav", mix_down.T, 24000)
+#sf.write("mix_sample.wav", mix_down.T, 24000)
 vocals_down = waveform_downsample(vocals.numpy(), 24000)
 vocals_down = torch.from_numpy(vocals_down)
 print(mix_down.shape)
 # Limita la duración
 max_samples = SEGMENT_DURATION * SAMPLE_RATE
-mix_down = mix_down[:, :max_samples]
-vocals_down = vocals_down[:, :max_samples]
+
+#Cogemos una fracción temporal para faciliar la inferencia
+start_sec = 20
+end_sec = 40
+start_sample = start_sec * SAMPLE_RATE
+end_sample = end_sec * SAMPLE_RATE
+mix_down = mix_down[:, start_sample:end_sample]
+vocals_down = vocals_down[:, start_sample:end_sample]
+torchaudio.save(".mixture20segundos.wav", mix_down, SAMPLE_RATE)
+torchaudio.save(".drums20segundos.wav", vocals_down, SAMPLE_RATE)
+
+if mix_down.ndim == 2:  # Estéreo a mono
+        mix_down = mix_down.mean(dim=0)  # (channels, time) -> (time,)
+if vocals_down.ndim == 2:  # Estéreo a mono
+        vocals_down = vocals_down.mean(dim=0)  # (channels, time) -> (time,)
+
+with torch.no_grad():
+    mel_mix = get_mel_spectrogram(mix_down.unsqueeze(0), modelVocoder.h).cpu()
+    mel_vocals = get_mel_spectrogram(vocals_down.unsqueeze(0), modelVocoder.h).cpu()
+
+save_mel_image(mel_mix, ".mel_mixture.png")
+save_mel_image(mel_vocals, ".mel_drums.png")
+
+
 print(mix_down.shape)
 
 

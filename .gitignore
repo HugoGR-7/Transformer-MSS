@@ -8,6 +8,13 @@ checkpoints/
 checkpoints probados/
 Copias de seguridad/
 wav generados/
+audios y espectrogramas para la memoria final/
+audios y espectrogramas para la memoria de Separación de fuentes sonoras musicales mediante aprendizaje automático y Transformers/
+espectrogramas/
+wavs voz/
+archivos generales/
+
+
 
 #Archivos no relevantes
 __pycache__/
